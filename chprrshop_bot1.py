@@ -3,7 +3,7 @@ import logging
 import math
 import os
 import json
-import aiosqlite
+import asyncpg  # Змінено з aiosqlite на asyncpg
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -17,9 +17,13 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 admin_id_raw = os.getenv("ADMIN_ID")
+DATABASE_URL = os.getenv("DATABASE_URL")  # Посилання на базу даних від Railway
 
 if not BOT_TOKEN or not admin_id_raw:
     exit("❌ Помилка: Не знайдено BOT_TOKEN або ADMIN_ID у файлі .env! Перевірте наявність файлу.")
+
+if not DATABASE_URL:
+    logging.warning("⚠️ Попередження: DATABASE_URL не знайдено. Переконайтеся, що змінна налаштована на Railway.")
 
 ADMIN_ID = int(admin_id_raw)
 MAIN_PAGE_PHOTO_ID = "AgACAgIAAxkBAANAajZpm3Z-aR_Y62cO4aQta-JWuNUAAvMbaxsmPrFJAxIZ1PNPc2sBAAMCAAN4AAM8BA"
@@ -40,37 +44,41 @@ PREMIUM_PRICES = {
     "12": ("1 год", 1290),
 }
 
-# ─── DATABASE ─────────────────────────────────────────────────────────────────
-DB_NAME = "bot_logs.db"
+# ─── DATABASE (POSTGRESQL) ────────────────────────────────────────────────────
 
 async def init_db():
-    """Створює таблицю для логів, якщо вона не існує."""
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("""
+    """Створює таблицю для логів у Postgres, якщо вона не існує."""
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        # У Postgres замість AUTOINCREMENT використовується SERIAL
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
                 username TEXT,
                 action TEXT,
                 details TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        await db.commit()
-        logging.info("✅ База даних успішно ініціалізована.")
+        await conn.close()
+        logging.info("✅ База даних PostgreSQL успішно ініціалізована.")
+    except Exception as e:
+        logging.error(f"❌ Помилка ініціалізації бази даних: {e}")
 
 async def log_action(user_id: int, username: str, action: str, details: dict = None):
-    """Функція для запису дії користувача в базу."""
+    """Функція для запису дії користувача в базу Postgres."""
     details_json = json.dumps(details, ensure_ascii=False) if details else ""
     uname = f"@{username}" if username else "No username"
     
     try:
-        async with aiosqlite.connect(DB_NAME) as db:
-            await db.execute(
-                "INSERT INTO logs (user_id, username, action, details) VALUES (?, ?, ?, ?)",
-                (user_id, uname, action, details_json)
-            )
-            await db.commit()
+        conn = await asyncpg.connect(DATABASE_URL)
+        # Замість знаків "?" тепер використовуються параметри "$1, $2, $3, $4"
+        await conn.execute(
+            "INSERT INTO logs (user_id, username, action, details) VALUES ($1, $2, $3, $4)",
+            user_id, uname, action, details_json
+        )
+        await conn.close()
     except Exception as e:
         logging.error(f"❌ Помилка запису в БД: {e}")
 
