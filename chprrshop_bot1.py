@@ -26,10 +26,30 @@ if not BOT_TOKEN or not admin_id_raw:
 ADMIN_ID = int(admin_id_raw)
 
 # ─── BOT & DISPATCHER INITIALIZATION ──────────────────────────────────────────
-# Перенесено наверх, щоб уникнути NameError: name 'dp' is not defined
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
+
+# ─── FSM STATES (ИСПРАВЛЕНИЕ ОШИБКИ ЗДЕСЬ) ────────────────────────────────────
+class AdminWorkflow(StatesGroup):
+    waiting_for_card = State()
+    waiting_for_price = State()
+    waiting_for_webapp = State()
+    waiting_decline_reason = State()
+
+class OrderStars(StatesGroup):
+    waiting_amount = State()
+    waiting_username = State()
+    waiting_confirmation = State()
+    waiting_receipt = State()
+
+class OrderPremium(StatesGroup):
+    waiting_username = State()
+    waiting_confirmation = State()
+    waiting_receipt = State()
+
+class UserFeedback(StatesGroup):
+    waiting_review = State()
 
 # Файл локального photo логотипу
 LOCAL_PHOTO_PATH = "photo_2026-02-28_11-24-12.jpg"
@@ -234,6 +254,20 @@ async def log_action(user_id: int, username: str, action: str, details: dict = N
         await conn.close()
     except Exception as e:
         logging.error(f"❌ Помилка запису в БД: {e}")
+
+# ─── МИССИНГ ФУНКЦИИ (ИСПРАВЛЕНИЕ ОШИБКИ ЗДЕСЬ) ───────────────────────────────
+def calc_stars_price(amount: int) -> float:
+    return round(amount * STAR_PRICE, 2)
+
+async def is_subscribed(bot: Bot, user_id: int) -> bool:
+    if user_id == ADMIN_ID:
+        return True
+    try:
+        member = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except Exception as e:
+        logging.error(f"Error checking subscription: {e}")
+        return False
 
 # ─── HELPERS (DYNAMIC KEYBOARDS) ──────────────────────────────────────────────
 def main_keyboard(lang: str) -> InlineKeyboardMarkup:
