@@ -21,7 +21,7 @@ admin_id_raw = os.getenv("ADMIN_ID")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not BOT_TOKEN or not admin_id_raw:
-    exit("❌ Помилка: Не знайдено BOT_TOKEN або ADMIN_ID у файлі .env!")
+    exit("❌ Помилка: Не знайдено BOT_TOKEN или ADMIN_ID у файлі .env!")
 
 ADMIN_ID = int(admin_id_raw)
 
@@ -83,10 +83,12 @@ async def log_action(user_id: int, username: str, action: str, details: dict = N
 class OrderStars(StatesGroup):
     waiting_amount = State()
     waiting_username = State()
+    waiting_confirmation = State()  # Крок перевірки даних
     waiting_receipt = State()
 
 class OrderPremium(StatesGroup):
     waiting_username = State()
+    waiting_confirmation = State()  # Крок перевірки даних
     waiting_receipt = State()
 
 class AdminWorkflow(StatesGroup):
@@ -205,6 +207,7 @@ async def send_main_page(chat_id: int, user_id: int, state: FSMContext):
                     logging.error(f"Error sending local photo: {e}")
                     sent = await bot.send_message(chat_id, main_text, reply_markup=main_keyboard(), parse_mode="HTML")
             else:
+                logging.warning(f"⚠️ Файл {LOCAL_PHOTO_PATH} не найден на сервере Railway! Убедитесь, что сделали git add для картинки.")
                 sent = await bot.send_message(chat_id, main_text, reply_markup=main_keyboard(), parse_mode="HTML")
     else:
         sent = await bot.send_message(
@@ -227,7 +230,6 @@ dp = Dispatcher(storage=MemoryStorage())
 @dp.message(CommandStart())
 async def cmd_start(msg: types.Message, state: FSMContext):
     await log_action(msg.from_user.id, msg.from_user.username, "command_start")
-    # Видалено msg.delete() щоб запобігти вильоту через відсутність прав адміна у користувача
     await send_main_page(msg.chat.id, msg.from_user.id, state)
 
 # ─── CHECK SUB / BACK MAIN ────────────────────────────────────────────────────
@@ -348,21 +350,64 @@ async def stars_username(msg: types.Message, state: FSMContext):
     price = data.get("stars_price")
     old = data.get("last_msg_id")
 
-    await log_action(msg.from_user.id, msg.from_user.username, "order_stars_created", {
+    await state.update_data(order_username=recipient_display, order_type="stars", client_id=msg.from_user.id, client_name=msg.from_user.username)
+    await state.set_state(OrderStars.waiting_confirmation)
+
+    verify_markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Все верно, заказать", callback_data="user_confirm_stars")],
+        [InlineKeyboardButton(text="🔙 Изменить юзернейм", callback_data="user_back_stars_username")]
+    ])
+
+    sent = await replace_message(
+        bot, msg.chat.id, old,
+        f"📋 <b>Проверка данных заказа</b>\n\n"
+        f"⭐️ Товар: <b>{amount} Звёзд</b>\n"
+        f"💰 Сумма к оплате: <b>{price} грн</b>\n"
+        f"📩 Получатель: <code>{recipient_display}</code>\n\n"
+        f"Проверьте правильность данных и нажмите кнопку подтверждения:",
+        reply_markup=verify_markup
+    )
+    await state.update_data(last_msg_id=sent.message_id)
+
+@dp.callback_query(F.data == "user_back_stars_username")
+async def user_back_stars_username(cb: types.CallbackQuery, state: FSMContext):
+    await state.set_state(OrderStars.waiting_username)
+    data = await state.get_data()
+    amount = data.get("stars_amount")
+    price = data.get("stars_price")
+    old = data.get("last_msg_id")
+    sent = await replace_message(
+        bot, cb.message.chat.id, old,
+        f"⭐️ Количество: <b>{amount} звёзд</b>\n💰 Стоимость: <b>{price} грн</b>\n\n"
+        "Введите username получателя:",
+        reply_markup=back_kb("menu_stars")
+    )
+    await state.update_data(last_msg_id=sent.message_id)
+    await cb.answer()
+
+@dp.callback_query(F.data == "user_confirm_stars")
+async def user_confirm_stars(cb: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    amount = data.get("stars_amount")
+    price = data.get("stars_price")
+    recipient_display = data.get("order_username")
+    client_id = data.get("client_id")
+    client_name = data.get("client_name")
+    old = data.get("last_msg_id")
+
+    await log_action(client_id, client_name, "order_stars_created", {
         "amount": amount, "price": price, "target_user": recipient_display
     })
 
-    await state.update_data(order_username=recipient_display, order_type="stars", client_id=msg.from_user.id, client_name=msg.from_user.username)
-
     admin_markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Подтвердить и отправить карту", callback_data=f"admin_confirm_{msg.from_user.id}")],
-        [InlineKeyboardButton(text="❌ Отклонить заказ", callback_data=f"admin_predecline_{msg.from_user.id}")]
+        [InlineKeyboardButton(text="✅ Подтвердить и отправить карту", callback_data=f"admin_confirm_{client_id}")],
+        [InlineKeyboardButton(text="❌ Отклонить заказ", callback_data=f"admin_predecline_{client_id}")]
     ])
 
     await bot.send_message(
         ADMIN_ID,
         f"🆕 <b>Новая заявка — Звёзды</b>\n\n"
-        f"👤 Покупатель: @{msg.from_user.username or msg.from_user.id} (ID: <code>{msg.from_user.id}</code>)\n"
+        f"👤 Покупатель: @{client_name or client_id} (ID: <code>{client_id}</code>)\n"
         f"⭐️ Количество: <b>{amount}</b>\n"
         f"💰 Сумма: <b>{price} грн</b>\n"
         f"📩 Получатель: <code>{recipient_display}</code>",
@@ -372,12 +417,13 @@ async def stars_username(msg: types.Message, state: FSMContext):
 
     await state.set_state(OrderStars.waiting_receipt)
     sent = await replace_message(
-        bot, msg.chat.id, old,
+        bot, cb.message.chat.id, old,
         f"✅ <b>Заявка отправлена!</b>\n\n⭐️ Звёзды: <b>{amount}</b>\n💰 Сумма: <b>{price} грн</b>\n👤 Получатель: <code>{recipient_display}</code>\n\n"
         "⏳ Ожидайте подтверждения от менеджера — он пришлёт реквизиты для оплаты.",
         reply_markup=back_kb("back_main")
     )
     await state.update_data(last_msg_id=sent.message_id)
+    await cb.answer()
 
 # ─── PREMIUM FLOW ─────────────────────────────────────────────────────────────
 @dp.callback_query(F.data == "menu_premium")
@@ -435,21 +481,64 @@ async def premium_username(msg: types.Message, state: FSMContext):
     price = data.get("premium_price")
     old = data.get("last_msg_id")
 
-    await log_action(msg.from_user.id, msg.from_user.username, "order_premium_created", {
+    await state.update_data(order_username=recipient_display, order_type="premium", client_id=msg.from_user.id, client_name=msg.from_user.username)
+    await state.set_state(OrderPremium.waiting_confirmation)
+
+    verify_markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Все верно, заказать", callback_data="user_confirm_premium")],
+        [InlineKeyboardButton(text="🔙 Изменить юзернейм", callback_data="user_back_premium_username")]
+    ])
+
+    sent = await replace_message(
+        bot, msg.chat.id, old,
+        f"📋 <b>Проверка данных заказа</b>\n\n"
+        f"💎 Товар: <b>Telegram Premium {label}</b>\n"
+        f"💰 Сумма к оплате: <b>{price} грн</b>\n"
+        f"📩 Получатель: <code>{recipient_display}</code>\n\n"
+        f"Проверьте правильность данных и нажмите кнопку подтверждения:",
+        reply_markup=verify_markup
+    )
+    await state.update_data(last_msg_id=sent.message_id)
+
+@dp.callback_query(F.data == "user_back_premium_username")
+async def user_back_premium_username(cb: types.CallbackQuery, state: FSMContext):
+    await state.set_state(OrderPremium.waiting_username)
+    data = await state.get_data()
+    label = data.get("premium_label")
+    price = data.get("premium_price")
+    old = data.get("last_msg_id")
+    sent = await replace_message(
+        bot, cb.message.chat.id, old,
+        f"💎 Выбрано: <b>Telegram Premium {label} — {price} грн</b>\n\n"
+        "Введите username получателя:",
+        reply_markup=back_kb("menu_premium")
+    )
+    await state.update_data(last_msg_id=sent.message_id)
+    await cb.answer()
+
+@dp.callback_query(F.data == "user_confirm_premium")
+async def user_confirm_premium(cb: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    label = data.get("premium_label")
+    price = data.get("premium_price")
+    recipient_display = data.get("order_username")
+    client_id = data.get("client_id")
+    client_name = data.get("client_name")
+    old = data.get("last_msg_id")
+
+    await log_action(client_id, client_name, "order_premium_created", {
         "duration": label, "price": price, "target_user": recipient_display
     })
 
-    await state.update_data(order_username=recipient_display, order_type="premium", client_id=msg.from_user.id, client_name=msg.from_user.username)
-
     admin_markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Подтвердить и отправить карту", callback_data=f"admin_confirm_{msg.from_user.id}")],
-        [InlineKeyboardButton(text="❌ Отклонить заказ", callback_data=f"admin_predecline_{msg.from_user.id}")]
+        [InlineKeyboardButton(text="✅ Подтвердить и отправить карту", callback_data=f"admin_confirm_{client_id}")],
+        [InlineKeyboardButton(text="❌ Отклонить заказ", callback_data=f"admin_predecline_{client_id}")]
     ])
 
     await bot.send_message(
         ADMIN_ID,
         f"🆕 <b>Новая заявка — Premium</b>\n\n"
-        f"👤 Покупатель: @{msg.from_user.username or msg.from_user.id} (ID: <code>{msg.from_user.id}</code>)\n"
+        f"👤 Покупатель: @{client_name or client_id} (ID: <code>{client_id}</code>)\n"
         f"💎 Тариф: <b>{label}</b>\n"
         f"💰 Сумма: <b>{price} грн</b>\n"
         f"📩 Получатель: <code>{recipient_display}</code>",
@@ -459,12 +548,13 @@ async def premium_username(msg: types.Message, state: FSMContext):
 
     await state.set_state(OrderPremium.waiting_receipt)
     sent = await replace_message(
-        bot, msg.chat.id, old,
+        bot, cb.message.chat.id, old,
         f"✅ <b>Заявка отправлена!</b>\n\n💎 Telegram Premium: <b>{label}</b>\n💰 Сумма: <b>{price} грн</b>\n👤 Получатель: <code>{recipient_display}</code>\n\n"
         "⏳ Ожидайте подтверждения от менеджера — он пришлёт реквизиты для оплаты.",
         reply_markup=back_kb("back_main")
     )
     await state.update_data(last_msg_id=sent.message_id)
+    await cb.answer()
 
 # ─── ADMIN FLOW (CONFIRM, DECLINE, COMPLETE) ─────────────────────────────────
 @dp.callback_query(F.data.startswith("admin_confirm_"))
@@ -491,7 +581,6 @@ async def admin_predecline(cb: types.CallbackQuery):
     if cb.from_user.id != ADMIN_ID: return
     user_id = int(cb.data.split("_")[2])
     
-    # Витягуємо оригінальний текст заявки, відсікаючи попередні попередження, якщо вони були
     base_text = cb.message.html_text.split("\n\n⚠️")[0]
     
     confirm_markup = InlineKeyboardMarkup(inline_keyboard=[
@@ -507,7 +596,6 @@ async def admin_decline_cancel(cb: types.CallbackQuery):
     if cb.from_user.id != ADMIN_ID: return
     user_id = int(cb.data.split("_")[3])
     
-    # Повертаємо чистий текст та початкові кнопки керування
     base_text = cb.message.html_text.split("\n\n⚠️")[0]
     
     admin_markup = InlineKeyboardMarkup(inline_keyboard=[
@@ -525,7 +613,7 @@ async def admin_decline_confirm(cb: types.CallbackQuery, state: FSMContext):
     base_text = cb.message.html_text.split("\n\n⚠️")[0]
     await state.set_state(AdminWorkflow.waiting_decline_reason)
     await state.update_data(decline_target_user=user_id, admin_msg_to_edit=cb.message.message_id, admin_text_history=base_text)
-    await cb.message.reply("📝 Введите <b>причину отказа</b> для клиента:")
+    await cb.message.reply("📝 Введите <b>причину отказа</b> для клиента:", parse_mode="HTML")
     await cb.answer()
 
 @dp.message(AdminWorkflow.waiting_decline_reason)
@@ -560,7 +648,7 @@ async def admin_input_reason(msg: types.Message, state: FSMContext):
         pass
         
     await state.clear()
-    await msg.reply("✅ Клиент успешно уведомлен об отказе.")
+    await msg.reply("✅ Клиент успешно уведомлен об отказе.", parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("admin_complete_"))
 async def admin_complete_order(cb: types.CallbackQuery):
@@ -639,7 +727,7 @@ async def receive_receipt(msg: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "user_leave_review")
 async def user_pre_review(cb: types.CallbackQuery, state: FSMContext):
     await state.set_state(UserFeedback.waiting_review)
-    sent = await bot.send_message(cb.message.chat.id, "📝 Напишите ваш отзыв в одном сообщении, и он автоматически опубликуется в нашем канале:")
+    sent = await bot.send_message(cb.message.chat.id, "📝 Напишите ваш отзыв в одном сообщении, и он автоматически опубликуется в нашем канале:", parse_mode="HTML")
     await state.update_data(last_msg_id=sent.message_id)
     await cb.answer()
 
@@ -657,10 +745,10 @@ async def user_input_review(msg: types.Message, state: FSMContext):
             text=f"💬 <b>Новый отзыв от {user_name}:</b>\n\n«{review_text}»\n\n🏪 @chprrshop",
             parse_mode="HTML"
         )
-        await msg.reply("❤️ <b>Спасибо за ваш отзыв!</b> Он успешно опубликован в канале отзывов.")
+        await msg.reply("❤️ <b>Спасибо за ваш отзыв!</b> Он успешно опубликован в канале отзывов.", parse_mode="HTML")
     except Exception as e:
         logging.error(f"Error publishing review: {e}")
-        await msg.reply("❌ Не удалось отправить отзыв в канал. Свяжитесь с администрацией.")
+        await msg.reply("❌ Не удалось отправить отзыв в канал. Свяжитесь с администрацией.", parse_mode="HTML")
 
     await state.clear()
     await send_main_page(msg.chat.id, msg.from_user.id, state)
