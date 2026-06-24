@@ -21,7 +21,7 @@ admin_id_raw = os.getenv("ADMIN_ID")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not BOT_TOKEN or not admin_id_raw:
-    exit("❌ Помилка: Не знадено BOT_TOKEN або ADMIN_ID у файлі .env!")
+    exit("❌ Помилка: Не знайдено BOT_TOKEN або ADMIN_ID у файлі .env!")
 
 ADMIN_ID = int(admin_id_raw)
 
@@ -62,7 +62,7 @@ async def init_db():
             )
         """)
         await conn.close()
-        logging.info("✅ База даних PostgreSQL успішно ініціалізована.")
+        logging.info("✅ База даних PostgreSQL успешно инициализирована.")
     except Exception as e:
         logging.error(f"❌ Помилка ініціалізації бази даних: {e}")
 
@@ -227,10 +227,7 @@ dp = Dispatcher(storage=MemoryStorage())
 @dp.message(CommandStart())
 async def cmd_start(msg: types.Message, state: FSMContext):
     await log_action(msg.from_user.id, msg.from_user.username, "command_start")
-    try:
-        await msg.delete()
-    except Exception:
-        pass
+    # Видалено msg.delete() щоб запобігти вильоту через відсутність прав адміна у користувача
     await send_main_page(msg.chat.id, msg.from_user.id, state)
 
 # ─── CHECK SUB / BACK MAIN ────────────────────────────────────────────────────
@@ -276,7 +273,7 @@ async def stars_pick(cb: types.CallbackQuery, state: FSMContext):
     sent = await replace_message(
         bot, cb.message.chat.id, old,
         f"⭐️ Выбрано: <b>{amount} звёзд — {price} грн</b>\n\n"
-        "Введите базовый английский <b>@username</b> получателя:",
+        "Введите username получателя:",
         reply_markup=back_kb("menu_stars")
     )
     await state.update_data(last_msg_id=sent.message_id)
@@ -290,7 +287,7 @@ async def stars_custom(cb: types.CallbackQuery, state: FSMContext):
     old = data.get("last_msg_id")
     sent = await replace_message(
         bot, cb.message.chat.id, old,
-        "✏️ Введите <b>желаемое количество звёзд</b> (минимально: 50):\n\n💡 Цена рассчитывается автоматически.",
+        "✏️ Введите желаемое количество звёзд (минимально: 50):\n\n💡 Цена рассчитывается автоматически.",
         reply_markup=back_kb("menu_stars")
     )
     await state.update_data(last_msg_id=sent.message_id)
@@ -323,7 +320,7 @@ async def stars_custom_amount(msg: types.Message, state: FSMContext):
     sent = await replace_message(
         bot, msg.chat.id, old,
         f"⭐️ Количество: <b>{amount} звёзд</b>\n💰 Стоимость: <b>{price} грн</b>\n\n"
-        "Введите базовый английский <b>@username</b> получателя:",
+        "Введите username получателя:",
         reply_markup=back_kb("menu_stars")
     )
     await state.update_data(last_msg_id=sent.message_id)
@@ -409,7 +406,7 @@ async def premium_pick(cb: types.CallbackQuery, state: FSMContext):
     sent = await replace_message(
         bot, cb.message.chat.id, old,
         f"💎 Выбрано: <b>Telegram Premium {label} — {price} грн</b>\n\n"
-        "Введите базовый английский <b>@username</b> получателя:",
+        "Введите username получателя:",
         reply_markup=back_kb("menu_premium")
     )
     await state.update_data(last_msg_id=sent.message_id)
@@ -493,19 +490,41 @@ async def admin_confirm_cb(cb: types.CallbackQuery):
 async def admin_predecline(cb: types.CallbackQuery):
     if cb.from_user.id != ADMIN_ID: return
     user_id = int(cb.data.split("_")[2])
+    
+    # Витягуємо оригінальний текст заявки, відсікаючи попередні попередження, якщо вони були
+    base_text = cb.message.html_text.split("\n\n⚠️")[0]
+    
     confirm_markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💥 Да, точно отклонить", callback_data=f"admin_decline_confirm_{user_id}")],
-        [InlineKeyboardButton(text="🔙 Отмена", callback_data="back_main")]
+        [InlineKeyboardButton(text="🔙 Отмена", callback_data=f"admin_decline_cancel_{user_id}")]
     ])
-    await cb.message.edit_text(cb.message.html_text + "\n\n⚠️ <b>Вы уверены, что хотите отклонить заказ?</b>", reply_markup=confirm_markup, parse_mode="HTML")
+    await cb.message.edit_text(base_text + "\n\n⚠️ <b>Вы уверены, что хотите отклонить заказ?</b>", reply_markup=confirm_markup, parse_mode="HTML")
+    await cb.answer()
+
+# Скасування відхилення (Повернення кнопок прийняти/відхилити)
+@dp.callback_query(F.data.startswith("admin_decline_cancel_"))
+async def admin_decline_cancel(cb: types.CallbackQuery):
+    if cb.from_user.id != ADMIN_ID: return
+    user_id = int(cb.data.split("_")[3])
+    
+    # Повертаємо чистий текст та початкові кнопки керування
+    base_text = cb.message.html_text.split("\n\n⚠️")[0]
+    
+    admin_markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Подтвердить и отправить карту", callback_data=f"admin_confirm_{user_id}")],
+        [InlineKeyboardButton(text="❌ Отклонить заказ", callback_data=f"admin_predecline_{user_id}")]
+    ])
+    await cb.message.edit_text(base_text, reply_markup=admin_markup, parse_mode="HTML")
     await cb.answer()
 
 @dp.callback_query(F.data.startswith("admin_decline_confirm_"))
 async def admin_decline_confirm(cb: types.CallbackQuery, state: FSMContext):
     if cb.from_user.id != ADMIN_ID: return
     user_id = int(cb.data.split("_")[3])
+    
+    base_text = cb.message.html_text.split("\n\n⚠️")[0]
     await state.set_state(AdminWorkflow.waiting_decline_reason)
-    await state.update_data(decline_target_user=user_id, admin_msg_to_edit=cb.message.message_id, admin_text_history=cb.message.html_text)
+    await state.update_data(decline_target_user=user_id, admin_msg_to_edit=cb.message.message_id, admin_text_history=base_text)
     await cb.message.reply("📝 Введите <b>причину отказа</b> для клиента:")
     await cb.answer()
 
@@ -571,7 +590,7 @@ async def ask_receipt(cb: types.CallbackQuery, state: FSMContext):
     old = data.get("last_msg_id")
     sent = await replace_message(
         bot, cb.message.chat.id, old,
-        "📎 <b>Отправьте чек или скриншот оплаты</b>\n\nПрикрепите фото или документ с подтверждением оплаты:",
+        "📎 <b>Отправьте чек или скриншот оплаты</b>\n\nПрикрепите фото или document с подтверждением оплаты:",
         reply_markup=back_kb("back_main")
     )
     await state.update_data(last_msg_id=sent.message_id, waiting_receipt=True)
