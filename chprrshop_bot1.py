@@ -7,7 +7,7 @@ import urllib.parse
 import asyncpg
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, WebAppInfo
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, FSInputFile, WebAppInfo
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -61,7 +61,6 @@ CHANNEL_URL = "https://t.me/chprrshop"
 REVIEWS_CHANNEL = "@otzivichprr"
 REVIEWS_URL = "https://t.me/otzivichprr"
 CONDITIONS_URL = "https://t.me/ysloviyapokupki"
-
 SUPPORT_USERNAME = "@chprr"
 
 # Динамічні константи (резервний кєш)
@@ -102,7 +101,7 @@ TEXTS = {
         "premium_title": "💎 <b>Telegram Premium</b>\n\nВыберите срок подписки:",
         "premium_selected": "💎 Выбрано: <b>Telegram Premium {label} — {price} грн</b>\n\nВведите username получателя:",
         "premium_username_error": "❗️ <b>Ошибка: Имя должно быть только на английском языке!</b>\n\n💎 Выбрано: <b>Telegram Premium {label} — {price} грн</b>\n\nВведите корректный username получателя:",
-        "admin_confirmed": "✅ <b>Ваш заказ оформлен!</b>\n\n💳 Для получения товара переведите ровно <b>{price} грн</b> на карту:\n<code>{CARD_NUMBER}</code>\n\nПосле оплаты нажмите <b>«Я оплатил»</b> и отправьте скриншот/чек.",
+        "admin_confirmed": "✅ <b>Ваш заказ оформлен!</b>\n\n💳 Для получения товара переведите ровно <b>{price} грн</b> на карту:\n<code>{CARD_NUMBER}</code>\n\n⚠️ <i>Обратите внимание: комиссию за перевод оплачивает покупатель.</i>\n\nПосле оплаты нажмите <b>«Я оплатил»</b> и отправьте скриншот/чек.",
         "btn_i_paid": "✅ Я оплатил — отправить чек",
         "admin_declined": "❌ <b>Ваш заказ отклонен менеджером</b>\n\n📝 Причина: <code>{reason}</code>\n\n📞 Обратная связь: {SUPPORT_USERNAME}",
         "admin_completed": "🎉 <b>Ваш заказ успешно выполнен!</b>\n\nСпасибо, что выбрали нас. Пожалуйста, оставьте отзыв о нашей работе, нажав на кнопку ниже:",
@@ -141,7 +140,7 @@ TEXTS = {
         "premium_title": "💎 <b>Telegram Premium</b>\n\nОберіть термін підписки:",
         "premium_selected": "💎 Обрано: <b>Telegram Premium {label} — {price} грн</b>\n\nВведіть username отримувача:",
         "premium_username_error": "❗️ <b>Помилка: Ім'я має бути тільки англійською мовою!</b>\n\n💎 Обрано: <b>Telegram Premium {label} — {price} грн</b>\n\nВведіть коректний username отримувача:",
-        "admin_confirmed": "✅ <b>Ваше замовлення оформлено!</b>\n\n💳 Для отримання товару перекажіть рівно <b>{price} грн</b> на картку:\n<code>{CARD_NUMBER}</code>\n\nПісля оплати натисніть <b>«Я оплатив»</b> та надішліть скріншот/чек.",
+        "admin_confirmed": "✅ <b>Ваше замовлення оформлено!</b>\n\n💳 Для отримання товару перекажіть рівно <b>{price} грн</b> на картку:\n<code>{CARD_NUMBER}</code>\n\n⚠️ <i>Зверніть увагу: комісію за переказ сплачує покупець.</i>\n\nПісля оплати натисніть <b>«Я оплатив»</b> та надішліть скріншот/чек.",
         "btn_i_paid": "✅ Я оплатил — надіслати чек",
         "admin_declined": "❌ <b>Ваше замовлення відхилено менеджером</b>\n\n📝 Причина: <code>{reason}</code>\n\n📞 Зворотний зв'язок: {SUPPORT_USERNAME}",
         "admin_completed": "🎉 <b>Ваше замовлення успішно виконано!</b>\n\nДякуємо, що обрали нас. Будь ласка, залиште відгук про нашу роботу, натиснувши на кнопку нижче:",
@@ -266,16 +265,24 @@ async def is_subscribed(bot: Bot, user_id: int) -> bool:
         return False
 
 # ─── KEYBOARDS ────────────────────────────────────────────────────────────────
+
+# Створюємо Reply-клавіатуру (Кнопка WebApp знизу екрану)
+def webapp_reply_keyboard(lang: str) -> ReplyKeyboardMarkup:
+    if not WEBAPP_URL or WEBAPP_URL == "https://example.com":
+        return ReplyKeyboardRemove()
+    btn_text = "📱 Открыть магазин" if lang == "ru" else "📱 Відкрити магазин"
+    safe_card = urllib.parse.quote(CARD_NUMBER.replace(" ", ""))
+    url_with_params = f"{WEBAPP_URL}?card={safe_card}"
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=btn_text, web_app=WebAppInfo(url=url_with_params))]],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Удобный магазин здесь 👇" if lang == "ru" else "Зручний магазин тут 👇"
+    )
+
+# Клавіатура головного меню (Inline)
 def main_keyboard(lang: str) -> InlineKeyboardMarkup:
-    buttons = []
-    if WEBAPP_URL and WEBAPP_URL != "https://example.com":
-        btn_text = "📱 Открыть магазин" if lang == "ru" else "📱 Відкрити магазин"
-        # Динамічно передаємо номер картки у WebApp
-        safe_card = urllib.parse.quote(CARD_NUMBER.replace(" ", ""))
-        url_with_params = f"{WEBAPP_URL}?card={safe_card}"
-        buttons.append([InlineKeyboardButton(text=btn_text, web_app=WebAppInfo(url=url_with_params))])
-        
-    buttons.extend([
+    buttons = [
         [
             InlineKeyboardButton(text=TEXTS[lang]["btn_stars"], callback_data="menu_stars"),
             InlineKeyboardButton(text=TEXTS[lang]["btn_premium"], callback_data="menu_premium"),
@@ -286,7 +293,7 @@ def main_keyboard(lang: str) -> InlineKeyboardMarkup:
         ],
         [InlineKeyboardButton(text=TEXTS[lang]["btn_channel"], url=CHANNEL_URL)],
         [InlineKeyboardButton(text=TEXTS[lang]["btn_lang"], callback_data="change_lang")]
-    ])
+    ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def sub_keyboard(lang: str) -> InlineKeyboardMarkup:
@@ -460,8 +467,7 @@ async def admin_save_webapp(msg: types.Message, state: FSMContext):
     await state.clear()
     await msg.answer(f"✅ Ссылка на WebApp сохранена: <code>{new_url}</code>", parse_mode="HTML")
 
-
-# ─── WEB APP HANDLER ──────────────────────────────────────────────────────────
+# ─── WEB APP HANDLER (ПРИЙОМ ДАНИХ З САЙТУ) ───────────────────────────────────
 @dp.message(F.web_app_data)
 async def web_app_handler(msg: types.Message, state: FSMContext):
     data_str = msg.web_app_data.data
@@ -481,28 +487,35 @@ async def web_app_handler(msg: types.Message, state: FSMContext):
         client_name = msg.from_user.username
         recipient_display = f"@{target_username}"
 
-        # Фіксуємо замовлення і переводимо клієнта одразу в режим очікування чека
         if action == "stars":
             await state.update_data(order_username=recipient_display, order_type="stars", stars_amount=value, stars_price=price, client_id=client_id, client_name=client_name)
             await log_action(client_id, client_name, "order_stars_created_webapp", {"amount": value, "price": price, "target_user": recipient_display})
+            await bot.send_message(
+                ADMIN_ID,
+                f"⚡️ <b>АВТОВИДАЧА КАРТКИ — Зірки (Через сайт)</b>\n\n👤 Покупець: @{client_name or client_id} (ID: <code>{client_id}</code>)\n⭐️ Кількість: <b>{value}</b>\n💰 Сума: <b>{price} грн</b>\n📩 Отримувач: <code>{recipient_display}</code>",
+                parse_mode="HTML"
+            )
             await state.set_state(OrderStars.waiting_receipt)
+            
         elif action == "premium":
             await state.update_data(order_username=recipient_display, order_type="premium", premium_key=value, premium_price=price, client_id=client_id, client_name=client_name)
             await log_action(client_id, client_name, "order_premium_created_webapp", {"duration": label, "price": price, "target_user": recipient_display})
+            await bot.send_message(
+                ADMIN_ID,
+                f"⚡️ <b>АВТОВИДАЧА КАРТКИ — Premium (Через сайт)</b>\n\n👤 Покупець: @{client_name or client_id} (ID: <code>{client_id}</code>)\n💎 Тариф: <b>{label}</b>\n💰 Сума: <b>{price} грн</b>\n📩 Отримувач: <code>{recipient_display}</code>",
+                parse_mode="HTML"
+            )
             await state.set_state(OrderPremium.waiting_receipt)
 
-        # Видаляємо головне меню, щоб не заважало
         if old:
             try: await bot.delete_message(msg.chat.id, old)
             except Exception: pass
 
-        # ОДРАЗУ ПРОСИМО ЧЕК (бо клієнт вже підтвердив оплату на сайті)
-        text_ru = f"✅ <b>Заказ зафиксирован!</b>\n\nВы указали, что перевели <b>{price} грн</b> за {label}.\n\n📎 <b>Пожалуйста, отправьте скриншот или квитанцию об оплате прямо сюда, в чат.</b>"
-        text_uk = f"✅ <b>Замовлення зафіксовано!</b>\n\nВи вказали, що переказали <b>{price} грн</b> за {label}.\n\n📎 <b>Будь ласка, надішліть скріншот або квитанцію про оплату прямо сюди, в чат.</b>"
+        # Одразу просимо надіслати скріншот чека (додано попередження про комісію)
+        text_ru = f"✅ <b>Заказ зафиксирован!</b>\n\nВы указали, что перевели <b>{price} грн</b> за {label}.\n\n⚠️ <i>Комиссию за перевод оплачивает покупатель.</i>\n\n📎 <b>Пожалуйста, отправьте скриншот или квитанцию об оплате прямо сюда, в чат.</b>"
+        text_uk = f"✅ <b>Замовлення зафіксовано!</b>\n\nВи вказали, що переказали <b>{price} грн</b> за {label}.\n\n⚠️ <i>Комісію за переказ сплачує покупець.</i>\n\n📎 <b>Будь ласка, надішліть скріншот або квитанцію про оплату прямо сюди, в чат.</b>"
         
         reply_text = text_ru if lang == "ru" else text_uk
-        
-        # Кнопка скасування, якщо юзер передумав
         back_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=TEXTS[lang]["back"], callback_data="back_main")]])
         
         sent = await bot.send_message(msg.chat.id, reply_text, reply_markup=back_kb, parse_mode="HTML")
@@ -511,19 +524,30 @@ async def web_app_handler(msg: types.Message, state: FSMContext):
     except Exception as e:
         logging.error(f"Помилка обробки WebAppData: {e}")
 
-
 # ─── BOT STANDARD HANDLERS ────────────────────────────────────────────────────
 @dp.message(CommandStart())
 async def cmd_start(msg: types.Message, state: FSMContext):
     await log_action(msg.from_user.id, msg.from_user.username, "command_start")
+    
+    # Відправляємо Reply-клавіатуру (кнопку WebApp) вниз екрану
+    lang = "ru"
+    kb = webapp_reply_keyboard(lang)
+    if kb:
+        await msg.answer("🤖 Запуск chprrshop...", reply_markup=kb)
+        
     await show_lang_selection(msg.chat.id, state)
 
 @dp.callback_query(F.data.startswith("set_lang_"))
 async def set_language(cb: types.CallbackQuery, state: FSMContext):
     lang = cb.data.split("_")[2]
     await state.update_data(lang=lang)
-    await cb.answer("Язык interface изменен!" if lang == "ru" else "Мову інтерфейсу змінено!")
+    
+    # Оновлюємо мову Reply-клавіатури знизу
+    msg_text = "Язык интерфейса изменен!" if lang == "ru" else "Мову інтерфейсу змінено!"
+    await bot.send_message(cb.message.chat.id, msg_text, reply_markup=webapp_reply_keyboard(lang))
+    
     await send_main_page(cb.message.chat.id, cb.from_user.id, state)
+    await cb.answer()
 
 @dp.callback_query(F.data == "change_lang")
 async def change_lang_callback(cb: types.CallbackQuery, state: FSMContext):
@@ -799,7 +823,6 @@ async def receive_receipt(msg: types.Message, state: FSMContext):
     old = data.get("last_msg_id")
     client_id = data.get("client_id", msg.from_user.id)
     
-    # Отправляем чек админу с кнопкой "Заказ выполнен"
     caption = f"💰 <b>Чек оплаты получен!</b>\n👤 Покупатель: @{msg.from_user.username or '—'} (ID: <code>{client_id}</code>)\n📩 Получатель: <code>{data.get('order_username', '—')}</code>"
     complete_markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Заказ выполнен", callback_data=f"admin_complete_{client_id}")]])
     try:
