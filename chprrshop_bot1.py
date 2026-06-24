@@ -25,6 +25,12 @@ if not BOT_TOKEN or not admin_id_raw:
 
 ADMIN_ID = int(admin_id_raw)
 
+# ─── BOT & DISPATCHER INITIALIZATION ──────────────────────────────────────────
+# Перенесено наверх, щоб уникнути NameError: name 'dp' is not defined
+logging.basicConfig(level=logging.INFO)
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher(storage=MemoryStorage())
+
 # Файл локального photo логотипу
 LOCAL_PHOTO_PATH = "photo_2026-02-28_11-24-12.jpg"
 cached_photo_id = None
@@ -37,7 +43,7 @@ CONDITIONS_URL = "https://t.me/ysloviyapokupki"
 
 SUPPORT_USERNAME = "@chprr"
 
-# Динамические конфигурационные глобальные переменные (кэш БД)
+# Динамічні константи (резервний кєш)
 CARD_NUMBER = "4874 0700 5861 6069"
 STAR_PRICE = 0.80  
 WEBAPP_URL = "https://example.com"
@@ -108,7 +114,7 @@ TEXTS = {
         "stars_custom_prompt": "✏️ Введіть бажану кількість зірок (мінімально: 50):\n\n💡 Ціна розраховується автоматично.",
         "stars_min_error": "❗️ Мінімальна кількість зірок для замовлення — <b>50</b>. Введіть коректне число:",
         "stars_custom_qty": "⭐️ Кількість: <b>{amount} зірок</b>\n💰 Вартість: <b>{price} грн</b>\n\nВведіть username отримувача:",
-        "username_error": "❗️ <b>Помилка: Ім'я має бути тільки англійською мовою!</b>\n\n⭐️ Обрано: <b>{amount} зірок — {price} грн</b>\n\nВведіть коректний username отримувача:",
+        "username_error": "❗️ <b>Помилка: Ім'я має бути тільки англійською мовою!</b>\n\n⭐️ Обрано: <b>{amount} зірок — {price} грн</b>\n\nВведіть конкретний username отримувача:",
         "verify_title": "📋 <b>Перевірка данных замовлення</b>\n\n⭐️ Товар: <b>{item}</b>\n💰 Сума до оплати: <b>{price} грн</b>\n📩 Отримувач: <code>{recipient}</code>\n\nПеревірте правильність даних та натисніть кнопку підтвердження:",
         "btn_verify_confirm": "✅ Все правильно, замовити",
         "btn_verify_change": "🔙 Змінити юзернейм",
@@ -123,8 +129,8 @@ TEXTS = {
         "btn_leave_review": "💬 Залишити відгук",
         "ask_receipt": "📎 <b>Надішліть чек або скріншот оплати</b>\n\nПрикріпіть фото або документ з підтвердженням оплати:",
         "receipt_received": "🎉 <b>Чек отримано!</b>\n\nМенеджер перевірить платіж та доставить товар найближчим часом.",
-        "review_prompt": "📝 Напишіть ваш відгук в одному повідомленні, і він автоматично опублікується в нашому канале:",
-        "review_thanks": "❤️ <b>Дякуємо за ваш відгук!</b> Його успішно опубліковано в каналі відгуків.",
+        "review_prompt": "📝 Напишіть ваш відгук в одному повідомленні, і он автоматично опублікується в нашому канале:",
+        "review_thanks": "❤️ <b>Дякуємо за ваш відгук!</b> Його успішно опубліковано в канале відгуків.",
         "review_error": "❌ Не вдалося відправити відгук в канал. Зв'яжіться з адміністрацією.",
         "back": "🔙 Назад",
         "stars_item": "{amount} Зірок",
@@ -170,7 +176,6 @@ async def init_db():
             )
         """)
         
-        # Наполнение базовыми дефолтными настройками, если таблицы пустые
         settings_exist = await conn.fetchval("SELECT COUNT(*) FROM bot_settings WHERE id = 1")
         if not settings_exist:
             await conn.execute("INSERT INTO bot_settings (id, card_number, star_price, webapp_url) VALUES (1, '4874 0700 5861 6069', 0.80, 'https://example.com')")
@@ -187,12 +192,11 @@ async def init_db():
             await conn.execute("INSERT INTO premium_tariffs (key, label_ru, label_uk, price) VALUES ('12', '1 год', '1 рік', 1290)")
             
         await conn.close()
-        logging.info("✅ База даних PostgreSQL и конфигурационные таблицы успешно инициализированы.")
+        logging.info("✅ База даних PostgreSQL и конфигурационные таблицы успешно инициализирована.")
     except Exception as e:
         logging.error(f"❌ Помилка ініціалізації бази даних: {e}")
 
 async def sync_config_globals():
-    """Синхронизирует данные из PostgreSQL в глобальную оперативную память бота."""
     global CARD_NUMBER, STAR_PRICE, WEBAPP_URL, STARS_OPTIONS, PREMIUM_PRICES
     try:
         conn = await asyncpg.connect(DATABASE_URL)
@@ -231,41 +235,9 @@ async def log_action(user_id: int, username: str, action: str, details: dict = N
     except Exception as e:
         logging.error(f"❌ Помилка запису в БД: {e}")
 
-# ─── STATES ───────────────────────────────────────────────────────────────────
-class OrderStars(StatesGroup):
-    waiting_amount = State()
-    waiting_username = State()
-    waiting_confirmation = State()
-    waiting_receipt = State()
-
-class OrderPremium(StatesGroup):
-    waiting_username = State()
-    waiting_confirmation = State()
-    waiting_receipt = State()
-
-class AdminWorkflow(StatesGroup):
-    waiting_decline_reason = State()
-    waiting_for_card = State()
-    waiting_for_price = State()
-    waiting_for_webapp = State()
-
-class UserFeedback(StatesGroup):
-    waiting_review = State()
-
 # ─── HELPERS (DYNAMIC KEYBOARDS) ──────────────────────────────────────────────
-async def is_subscribed(bot: Bot, user_id: int) -> bool:
-    try:
-        m = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
-        return m.status not in ("left", "kicked", "banned")
-    except Exception:
-        return False
-
-def calc_stars_price(amount: int) -> int:
-    return math.ceil(amount * STAR_PRICE)
-
 def main_keyboard(lang: str) -> InlineKeyboardMarkup:
     buttons = []
-    # Если WebApp URL настроен и не является заглушкой, выводим кнопку приложения первой
     if WEBAPP_URL and WEBAPP_URL != "https://example.com":
         btn_text = "📱 Открыть магазин" if lang == "ru" else "📱 Відкрити магазин"
         buttons.append([InlineKeyboardButton(text=btn_text, web_app=WebAppInfo(url=WEBAPP_URL))])
@@ -305,7 +277,7 @@ def stars_keyboard(lang: str) -> InlineKeyboardMarkup:
             row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton(text="✏| " + TEXTS[lang]["stars_custom_prompt"].split("\n")[0].replace("✏️ ", ""), callback_data="stars_custom")])
+    rows.append([InlineKeyboardButton(text="✏️ " + TEXTS[lang]["stars_custom_prompt"].split("\n")[0].replace("✏️ ", ""), callback_data="stars_custom")])
     rows.append([InlineKeyboardButton(text=TEXTS[lang]["back"], callback_data="back_main")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -380,7 +352,7 @@ async def send_main_page(chat_id: int, user_id: int, state: FSMContext):
         sent = await bot.send_message(chat_id, TEXTS[lang]["sub_required"], reply_markup=sub_keyboard(lang), parse_mode="HTML")
     await state.update_data(last_msg_id=sent.message_id)
 
-# ─── ADMIN SYSTEM PANELS (ANALYTICS & SETTINGS HANDLERS) ──────────────────────
+# ─── ADMIN SYSTEM PANELS ──────────────────────────────────────────────────────
 @dp.message(filters.Command("admin"))
 async def cmd_admin_panel(msg: types.Message):
     if msg.from_user.id != ADMIN_ID: return
@@ -475,11 +447,16 @@ async def admin_save_webapp(msg: types.Message, state: FSMContext):
     await msg.answer(f"✅ Ссылка на WebApp успешно сохранена: <code>{new_url}</code>", parse_mode="HTML")
 
 # ─── BOT STANDARD HANDLERS ────────────────────────────────────────────────────
+@dp.message(CommandStart())
+async def cmd_start(msg: types.Message, state: FSMContext):
+    await log_action(msg.from_user.id, msg.from_user.username, "command_start")
+    await show_lang_selection(msg.chat.id, state)
+
 @dp.callback_query(F.data.startswith("set_lang_"))
 async def set_language(cb: types.CallbackQuery, state: FSMContext):
     lang = cb.data.split("_")[2]
     await state.update_data(lang=lang)
-    await cb.answer("Язык интерфейса изменен!" if lang == "ru" else "Мову інтерфейсу змінено!")
+    await cb.answer("Язык interface изменен!" if lang == "ru" else "Мову інтерфейсу змінено!")
     await send_main_page(cb.message.chat.id, cb.from_user.id, state)
 
 @dp.callback_query(F.data == "change_lang")
@@ -730,7 +707,7 @@ async def user_confirm_premium(cb: types.CallbackQuery, state: FSMContext):
     await state.update_data(last_msg_id=sent.message_id)
     await cb.answer()
 
-# ─── ADMIN ORDER CONFIRM / REJECT UTILITIES ───────────────────────────────────
+# ─── ADMIN ORDER UTILITIES ────────────────────────────────────────────────────
 @dp.callback_query(F.data.startswith("admin_confirm_"))
 async def admin_confirm_cb(cb: types.CallbackQuery):
     if cb.from_user.id != ADMIN_ID: return
@@ -871,7 +848,7 @@ async def user_input_review(msg: types.Message, state: FSMContext):
 # ─── RUN ──────────────────────────────────────────────────────────────────────
 async def main():
     await init_db()
-    await sync_config_globals()  # Синхронизируем настройки из базы данных в кэш бота
+    await sync_config_globals()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
